@@ -8,11 +8,10 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 
 
-# <-- Distribuciones -->
-def dagum_rv(k, alpha, beta, gamma=0):
-    """ Genera variable aleatoria de distribución Dagum """
+def burr_rv(k, alpha, beta, gamma=0):
+    """ Genera variable aleatoria de distribución Burr """
     u = np.random.uniform(0, 1)
-    x = beta * ((u**(-1/k) - 1)**(-1/alpha)) + gamma #Inversa de dagum
+    x = gamma + beta * (((1 - u)**(-1/k) - 1)**(1/alpha))
     return x
 
 
@@ -48,9 +47,7 @@ def gamma_3p_rv(alpha, beta, gamma):
     return max(x, 0)  
 
 
-# <-- Parametros base de la simulacion -->
-
-LLEGADAS_PARAMS_BASE = {'k': 0.76795, 'alpha': 3.4325, 'beta': 12.669, 'gamma': 0}
+LLEGADAS_PARAMS_BASE = {'k': 1.1786, 'alpha': 2.9348, 'beta': 12.183, 'gamma': 0}
 
 SERVICIO_PARAMS_BASE = {
     'alpha': 156.3,
@@ -67,37 +64,28 @@ REPOSICION_PARAMS_BASE = {
 }
 
 CAPACIDAD_MICRO = 55
-TIEMPO_SIMULACION = 3600  # 1 hora
-NUM_REPLICAS = 3  # Cantidad de réplicas por combinación factorial
+TIEMPO_SIMULACION = 3600
+NUM_REPLICAS = 3
 
 
-# <-- Niveles DoE (3 factores x 2 niveles) -->
-# Factor 1: Arribos (se modifica beta de Dagum: menor beta => menor tiempo entre llegadas => mayor tasa de arribos)
-# Factor 2: Servicio de carga (multiplicador de tiempo de carga Wakeby: menor factor => mayor tasa de servicio)
-# Factor 3: Reposición (multiplicador de tiempo de reposición Gamma: menor factor => mayor tasa de reposición)
 DOE_NIVELES = {
     'arribos': {
-        'bajo': 15.2,   # Menor tasa de arribos
-        'alto': 10.1    # Mayor tasa de arribos
+        'bajo': 15.2,
+        'alto': 10.1
     },
     'servicio': {
-        'bajo': 1.20,   # Servicio más lento
-        'alto': 0.80    # Servicio más rápido
+        'bajo': 1.20,
+        'alto': 0.80
     },
     'reposicion': {
-        'bajo': 1.20,   # Reposición más lenta
-        'alto': 0.80    # Reposición más rápida
+        'bajo': 1.20,
+        'alto': 0.80
     }
 }
 
-
-
-# <-- CLASES Y FUNCIONES DE LA SIMULACIÓN -->
-
 class TerminalMicros:
     """Clase para gestionar la terminal de micros"""
-   
-    ## Constructor
+
     def __init__(self, env):
         self.env = env
         self.cola = []
@@ -105,14 +93,12 @@ class TerminalMicros:
         self.pasajeros_atendidos = 0
         self.micros_despachados = 0
 
-        # Métricas DoE
         self.tiempos_entre_llegadas = []
         self.tiempos_espera = []
         self.tiempo_total_servicio = []
         self.tiempos_reposicion = []
         self.micro_cargando = False
 
-        # Trazas para gráficos operativos (no DoE)
         self.eventos_tiempo = [0.0]
         self.hist_cola = [0]
         self.hist_arribos_acum = [0]
@@ -135,8 +121,7 @@ def llegada_pasajeros(env, terminal, llegadas_params):
     contPasajeros = 0
     
     while True:
-        # Generar tiempo entre llegadas con parámetros del escenario DoE
-        tiempo_entre_llegadas = dagum_rv(
+        tiempo_entre_llegadas = burr_rv(
             llegadas_params['k'],
             llegadas_params['alpha'],
             llegadas_params['beta'],
@@ -146,7 +131,6 @@ def llegada_pasajeros(env, terminal, llegadas_params):
         
         yield env.timeout(tiempo_entre_llegadas)
         
-        # Registrar llegada del pasajero
         contPasajeros += 1
         terminal.total_llegadas += 1
         tiempo_llegada = env.now
@@ -177,25 +161,22 @@ def despacho_micros(env, terminal, servicio_params, reposicion_params, factor_se
             terminal.tiempo_total_servicio.append(0)
             continue
 
-        # El micro permanece en plataforma durante el servicio total.
-        # Asi tambien pueden subir pasajeros que lleguen mientras esta cargando.
+        # Durante la carga siguen llegando pasajeros a la cola.
         tiempo_servicio_total = wakeby_rv(**servicio_params) * factor_servicio
         terminal.micro_cargando = True
         terminal.estado_carga_t.append(env.now)
         terminal.estado_carga_y.append(1)
 
-        # Simular el tiempo de carga antes de cerrar puertas.
         yield env.timeout(tiempo_servicio_total)
         terminal.micro_cargando = False
         terminal.estado_carga_t.append(env.now)
         terminal.estado_carga_y.append(0)
 
-        # Servicio FIFO al finalizar la carga: suben hasta capacidad.
+        # Al finalizar la carga, suben en FIFO hasta capacidad.
         pasajeros_a_subir = min(len(terminal.cola), CAPACIDAD_MICRO)
         pasajeros_subiendo = terminal.cola[:pasajeros_a_subir]
         terminal.cola = terminal.cola[pasajeros_a_subir:]
-        
-        # Calcular tiempo de espera de cada pasajero
+
         for pasajero in pasajeros_subiendo:
             tiempo_espera = env.now - pasajero['tiempo_llegada']
             terminal.tiempos_espera.append(tiempo_espera)
@@ -205,19 +186,12 @@ def despacho_micros(env, terminal, servicio_params, reposicion_params, factor_se
         terminal.tiempos_partida_micro.append(env.now)
         terminal.registrar_evento_cola()
 
-
-
-# <-- FUNCIÓN PRINCIPAL DE SIMULACIÓN -->
-
-
 def ejecutar_escenario(llegadas_params, servicio_params, reposicion_params, factor_servicio, factor_reposicion):
     """Ejecuta un escenario individual y devuelve métricas DoE."""
 
-    # Creamos entorno de simulación y terminal
     env = simpy.Environment()
     terminal = TerminalMicros(env)
-    
-    # Iniciar procesos
+
     env.process(llegada_pasajeros(env, terminal, llegadas_params))
     env.process(despacho_micros(env, terminal, servicio_params, reposicion_params, factor_servicio, factor_reposicion))
     
@@ -231,7 +205,6 @@ def ejecutar_escenario(llegadas_params, servicio_params, reposicion_params, fact
             break
         env.step()
     
-    # Cálculo de métricas del DoE (solo factores + variable respuesta)
     tiempos_servicio_validos = [t for t in terminal.tiempo_total_servicio if t > 0]
     tiempo_llegadas_promedio = np.mean(terminal.tiempos_entre_llegadas) if terminal.tiempos_entre_llegadas else 0
     tiempo_servicio_promedio = np.mean(tiempos_servicio_validos) if tiempos_servicio_validos else 0
@@ -290,24 +263,28 @@ def generar_grafico_operativo(terminal, resultados_dir):
 
 
 def ejecutar_doe():
-    """Ejecuta DoE 3^2 con réplicas 3."""
+    """Ejecuta DoE 2^3 + punto central con réplicas."""
 
     resultados = []
     corrida_idx = 0
 
-    for nivel_arribos, nivel_servicio, nivel_reposicion in product(['bajo', 'alto'], repeat=3):
+    escenarios_factoriales = list(product(['bajo', 'alto'], repeat=3))
+    escenarios = escenarios_factoriales + [('centro', 'centro', 'centro')]
+
+    for nivel_arribos, nivel_servicio, nivel_reposicion in escenarios:
         corrida_idx += 1
         for replica in range(1, NUM_REPLICAS + 1):
             print(f"Ejecutando corrida {corrida_idx}, replica {replica}/{NUM_REPLICAS}: "
-                  f"A_nivel={1 if nivel_arribos=='bajo' else -1}, "
-                  f"S_nivel={1 if nivel_servicio=='bajo' else -1}, "
-                  f"R_nivel={1 if nivel_reposicion=='bajo' else -1}")
+                  f"A_nivel={1 if nivel_arribos=='bajo' else (-1 if nivel_arribos=='alto' else 0)}, "
+                  f"S_nivel={1 if nivel_servicio=='bajo' else (-1 if nivel_servicio=='alto' else 0)}, "
+                  f"R_nivel={1 if nivel_reposicion=='bajo' else (-1 if nivel_reposicion=='alto' else 0)}")
 
             llegadas_params = dict(LLEGADAS_PARAMS_BASE)
-            llegadas_params['beta'] = DOE_NIVELES['arribos'][nivel_arribos]
+            if nivel_arribos != 'centro':
+                llegadas_params['beta'] = DOE_NIVELES['arribos'][nivel_arribos]
 
-            factor_servicio = DOE_NIVELES['servicio'][nivel_servicio]
-            factor_reposicion = DOE_NIVELES['reposicion'][nivel_reposicion]
+            factor_servicio = DOE_NIVELES['servicio'][nivel_servicio] if nivel_servicio != 'centro' else 1.0
+            factor_reposicion = DOE_NIVELES['reposicion'][nivel_reposicion] if nivel_reposicion != 'centro' else 1.0
 
             metricas, _ = ejecutar_escenario(
                 llegadas_params=llegadas_params,
@@ -317,24 +294,20 @@ def ejecutar_doe():
                 factor_reposicion=factor_reposicion,
             )
 
-            # Agregar información codificada de factores, valores reales y replica
             metricas['corrida'] = corrida_idx
             metricas['replica'] = replica
-            metricas['A_nivel'] = 1 if nivel_arribos == 'bajo' else -1
-            metricas['S_nivel'] = 1 if nivel_servicio == 'bajo' else -1
-            metricas['R_nivel'] = 1 if nivel_reposicion == 'bajo' else -1
-            # Valores reales: usar los promedios simulados
+            metricas['A_nivel'] = 1 if nivel_arribos == 'bajo' else (-1 if nivel_arribos == 'alto' else 0)
+            metricas['S_nivel'] = 1 if nivel_servicio == 'bajo' else (-1 if nivel_servicio == 'alto' else 0)
+            metricas['R_nivel'] = 1 if nivel_reposicion == 'bajo' else (-1 if nivel_reposicion == 'alto' else 0)
             metricas['A'] = metricas['tiempo_llegadas_promedio_segundos']
             metricas['S'] = metricas['tiempo_servicio_promedio_segundos']
             metricas['R'] = metricas['tiempo_reposicion_promedio_segundos']
 
             resultados.append(metricas)
 
-    # Guardado de resultados DoE
     resultados_dir = os.path.join(os.path.dirname(__file__), "resultados")
     os.makedirs(resultados_dir, exist_ok=True)
 
-    # Limpia artefactos DoE antiguos que ya no se usan.
     for obsolete in ["doe_3factores_2niveles.csv", "graficos_doe.png"]:
         obsolete_path = os.path.join(resultados_dir, obsolete)
         if os.path.exists(obsolete_path):
@@ -342,10 +315,8 @@ def ejecutar_doe():
 
     df_resultados = pd.DataFrame(resultados)
     
-    # Reordenar columnas según estructura recomendada
     cols_orden = ['corrida', 'replica', 'A_nivel', 'S_nivel', 'R_nivel', 'A', 'S', 'R',
                   'tiempo_espera_cola_promedio_segundos']
-    # Renombrar última columna a Wq
     df_resultados = df_resultados[cols_orden]
     df_resultados = df_resultados.rename(columns={'tiempo_espera_cola_promedio_segundos': 'Wq'})
     
@@ -354,13 +325,11 @@ def ejecutar_doe():
         df_resultados.to_excel(excel_path, index=False)
         print(f"\nResultados DoE guardados en: {excel_path}")
     except PermissionError:
-        # Si el archivo está abierto en Excel/VS Code, guarda una copia con timestamp.
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         excel_path = os.path.join(resultados_dir, f"doe_3factores_2niveles_r{NUM_REPLICAS}_{ts}.xlsx")
         df_resultados.to_excel(excel_path, index=False)
         print(f"\nResultados DoE guardados en: {excel_path} (copía con timestamp)")
 
-    # Gráfico operativo no-DoE para visualizar llegadas y micros.
     _, terminal_ref = ejecutar_escenario(
         llegadas_params=LLEGADAS_PARAMS_BASE,
         servicio_params=SERVICIO_PARAMS_BASE,
