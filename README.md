@@ -2,7 +2,7 @@
 
 Proyecto final de Simulación — Modelado y análisis de una terminal de micros mediante simulación de eventos discretos y diseño de experimentos (DoE 2³).
 
-**Autores:** Vijandi Iván Andres · Benjamín Elizalde
+**Autores:** Vijandi Iván Andres · Elizalde Benjamín
 
 ---
 
@@ -48,7 +48,7 @@ Genera `resultados/doe_r3.xlsx` con las métricas de cada corrida y réplica.
 
 ### Gráfico de superficie de respuesta
 ```bash
-python SuperficieRespuesa.py
+python SuperficieRespuesta.py
 ```
 Genera `resultados/superficie_respuesta.png`.
 
